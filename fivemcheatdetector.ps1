@@ -1,10 +1,9 @@
 # ==================================
-# Argus - PC Integrity & Cheat Check
+# Argus - PC Integrity & Cheat Check (Silent FiveM Mode)
 # Updated & Fixed Version
 # Author: SeraphV2
 # ==================================
 
-Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $OrgName = "Argus"
@@ -195,7 +194,6 @@ function Get-EventLogs($OutFolder){
 
 # ---------------- MAIN SCAN FUNCTION ----------------
 function RunScan($Game,$Keys,$Operator,$Player){
-    $StartTime = Get-Date
     $Time = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
     $PC = $env:COMPUTERNAME
     $SafeGame = ($Game -replace '[^a-zA-Z0-9_-]', '_')
@@ -211,172 +209,24 @@ function RunScan($Game,$Keys,$Operator,$Player){
     "Date: $(Get-Date)" | Out-File $OutFile -Append
     "" | Out-File $OutFile -Append
 
-    # --- PROGRESS WINDOW (WPF) ---
-    $ProgressForm = New-Object System.Windows.Window
-    $ProgressForm.Title = "Scanning $Game..."
-    $ProgressForm.Width = 400
-    $ProgressForm.Height = 160
-    $ProgressForm.WindowStartupLocation = "CenterScreen"
-
-    $grid = New-Object System.Windows.Controls.Grid
-    $ProgressForm.Content = $grid
-
-    $Label = New-Object System.Windows.Controls.TextBlock
-    $Label.Text = "Starting scan..."
-    $Label.Margin = "10"
-    $grid.Children.Add($Label)
-
-    $ProgressBar = New-Object System.Windows.Controls.ProgressBar
-    $ProgressBar.Height = 20
-    $ProgressBar.Margin = "10,40,10,0"
-    $ProgressBar.Minimum = 0
-    $ProgressBar.Maximum = 100
-    $grid.Children.Add($ProgressBar)
-
-    $TimerLabel = New-Object System.Windows.Controls.TextBlock
-    $TimerLabel.Margin = "10,70,10,0"
-    $grid.Children.Add($TimerLabel)
-
-    $ProgressForm.Show()
-
-    $timer = New-Object System.Windows.Threading.DispatcherTimer
-    $timer.Interval = [TimeSpan]::FromSeconds(1)
-    $timer.Add_Tick({
-        $elapsed = (Get-Date) - $StartTime
-        $TimerLabel.Text = "Elapsed Time: {0}h {1}m {2}s" -f $elapsed.Hours,$elapsed.Minutes,$elapsed.Seconds
-    })
-    $timer.Start()
-
-    # --- SCAN OPERATIONS ---
-    $ProgressBar.Value = 20
-    $Label.Text = "Scanning registry..."
     $Timeline += ScanRegistry $OutFile
-
-    $ProgressBar.Value = 40
-    $Label.Text = "Scanning startup and scheduled tasks..."
     $Timeline += ScanStartup $OutFile
-
-    $ProgressBar.Value = 60
-    $Label.Text = "Scanning services and drivers..."
     $Timeline += ScanServicesAndDrivers $OutFile
 
     $TempFolder = "$env:TEMP\PC_EVIDENCE_$Time"
     New-Item -ItemType Directory -Path $TempFolder -Force | Out-Null
 
-    $ProgressBar.Value = 80
-    $Label.Text = "Collecting USB history and event logs..."
     Get-USBHistory $TempFolder | Out-Null
     Get-EventLogs $TempFolder | Out-Null
 
-    $ProgressBar.Value = 100
-    $timer.Stop()
-    $ProgressForm.Close()
-
-    # --- FINALIZE REPORT & ZIP ---
     $Timeline | Export-Csv -Path "$TempFolder\Timeline.csv" -NoTypeInformation -Force
     Copy-Item -Path $OutFile -Destination "$TempFolder\" -Force -ErrorAction SilentlyContinue
     $ZipFile = "$env:USERPROFILE\Desktop\PC_EVIDENCE_${PC}_$Time.zip"
     Compress-Archive -Path "$TempFolder\*" -DestinationPath $ZipFile -Force
     Remove-Item $TempFolder -Recurse -Force -ErrorAction SilentlyContinue
-
-    [System.Windows.MessageBox]::Show("Scan complete.`nReport saved to Desktop.`nZIP evidence: $ZipFile","Done")
 }
 
-# ---------------- GUI ----------------
-$w = New-Object System.Windows.Window
-$w.Title = "Argus - PC Integrity"
-$w.Width = 520
-$w.Height = 620
-$w.WindowStartupLocation = "CenterScreen"
-$w.Background = "#1E1E1E"
-
-$Main = New-Object System.Windows.Controls.DockPanel
-
-# Header
-$Header = New-Object System.Windows.Controls.StackPanel
-$Header.Orientation = "Horizontal"
-$Header.Margin = "10"
-$TitleStack = New-Object System.Windows.Controls.StackPanel
-$TitleStack.Margin = "10,0,0,0"
-$TitleText = New-Object System.Windows.Controls.TextBlock
-$TitleText.Text = "Argus"
-$TitleText.FontSize = 22
-$TitleText.FontWeight = "Bold"
-$TitleText.Foreground = "White"
-$SubText = New-Object System.Windows.Controls.TextBlock
-$SubText.Text = "Integrity && PC Check"
-$SubText.FontSize = 14
-$SubText.Foreground = "LightGray"
-$TitleStack.AddChild($TitleText)
-$TitleStack.AddChild($SubText)
-$Header.AddChild($TitleStack)
-[System.Windows.Controls.DockPanel]::SetDock($Header,"Top")
-$Main.AddChild($Header)
-
-# Operator / Player
-$FieldsPanel = New-Object System.Windows.Controls.StackPanel
-$FieldsPanel.Orientation = "Horizontal"
-$FieldsPanel.Margin = "10"
-$OpLabel = New-Object System.Windows.Controls.TextBlock
-$OpLabel.Text = "Operator:"
-$OpLabel.Width = 70
-$OpLabel.Foreground = "White"
-$OpBox = New-Object System.Windows.Controls.TextBox
-$OpBox.Width = 120
-$OpBox.Margin = "5,0,10,0"
-$PlLabel = New-Object System.Windows.Controls.TextBlock
-$PlLabel.Text = "Player:"
-$PlLabel.Width = 50
-$PlLabel.Foreground = "White"
-$PlBox = New-Object System.Windows.Controls.TextBox
-$PlBox.Width = 120
-$PlBox.Margin = "5,0,0,0"
-$FieldsPanel.AddChild($OpLabel)
-$FieldsPanel.AddChild($OpBox)
-$FieldsPanel.AddChild($PlLabel)
-$FieldsPanel.AddChild($PlBox)
-[System.Windows.Controls.DockPanel]::SetDock($FieldsPanel,"Top")
-$Main.AddChild($FieldsPanel)
-
-# Buttons
-$p = New-Object System.Windows.Controls.StackPanel
-$p.Margin = "20"
-$p.HorizontalAlignment = "Center"
-[System.Windows.Controls.DockPanel]::SetDock($p,"Top")
-$Main.AddChild($p)
-
-function Btn($n,$k){
-    $b = New-Object System.Windows.Controls.Button
-    $b.Content = $n
-    $b.Width = 200
-    $b.Height = 40
-    $b.Margin = "0,5,0,5"
-    $b.Background = "#3C3C3C"
-    $b.Foreground = "White"
-    $b.Add_Click({
-        if([string]::IsNullOrWhiteSpace($OpBox.Text) -or [string]::IsNullOrWhiteSpace($PlBox.Text)){
-            [System.Windows.MessageBox]::Show("Please enter Operator and Player names.","Input required")
-            return
-        }
-        RunScan $n $k $OpBox.Text $PlBox.Text
-    })
-    $p.AddChild($b)
-}
-
-Btn "FiveM / GTA" @("fivem","gta","rage","lua","menu","inject")
-Btn "Call of Duty" @("cod","warzone","unlock","aim","esp")
-Btn "Rainbow Six Siege" @("r6","siege","recoil","wall")
-Btn "Valorant" @("valorant","vanguard","overlay","trigger")
-Btn "ALL GAMES" ($High+$Medium+$Low)
-
-# Footer
-$Footer = New-Object System.Windows.Controls.TextBlock
-$Footer.Text = $FooterText
-$Footer.Margin = "10"
-$Footer.HorizontalAlignment = "Center"
-$Footer.Foreground = "LightGray"
-[System.Windows.Controls.DockPanel]::SetDock($Footer,"Bottom")
-$Main.AddChild($Footer)
-
-$w.Content = $Main
-$w.ShowDialog() | Out-Null
+# ---------------- SILENT FIVEM EXECUTION ----------------
+$Operator = if ($env:ARGUS_OPERATOR) { $env:ARGUS_OPERATOR } else { $env:USERNAME }
+$Player = if ($env:ARGUS_PLAYER) { $env:ARGUS_PLAYER } else { $env:USERNAME }
+RunScan "FiveM / GTA" @("fivem","gta","rage","lua","menu","inject") $Operator $Player | Out-Null
