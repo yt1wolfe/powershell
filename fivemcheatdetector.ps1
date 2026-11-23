@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    FiveM-Sentinel v3 - clean, read-only PC-check scanner for FiveM cheat evidence.
+    FiveM-Sentinel v3.1 - fast, clean, read-only PC-check scanner for FiveM cheat evidence.
 
 .DESCRIPTION
     Shows one progress line per check, then a short plain-English summary:
@@ -9,11 +9,12 @@
         NOTE    = good to know (not a problem by itself)
     Nothing is modified, deleted or uploaded. A full report (HTML/TXT/CSV) is saved to the Desktop.
 
-.PARAMETER Deep          Scan ALL drives completely (slow). Default is a fast targeted scan.
-.PARAMETER ShowAll       Show every finding on screen (default: top ones only, rest in the report).
-.PARAMETER NoOpen        Do not open the HTML report at the end.
-.PARAMETER Days          How many days back to read event logs (default 60).
-.PARAMETER ExtraKeywords Extra cheat names to treat as serious, e.g. -ExtraKeywords 'newcheat','othercheat'.
+.PARAMETER Deep                Scan ALL drives completely (very slow). Default is the quick key-folder scan.
+.PARAMETER MaxFileScanSeconds  Time limit for the file scan in quick mode (default 40).
+.PARAMETER ShowAll             Show every finding on screen (default: top ones only).
+.PARAMETER NoOpen              Do not open the HTML report at the end.
+.PARAMETER Days                How many days back to read event logs (default 60).
+.PARAMETER ExtraKeywords       Extra cheat names to treat as serious, e.g. -ExtraKeywords 'newcheat','other'.
 
 .NOTE
     Run as Administrator. A scanner finds INDICATORS, not proof. Always review findings manually.
@@ -23,6 +24,7 @@ param(
     [switch]$Deep,
     [switch]$ShowAll,
     [switch]$NoOpen,
+    [int]$MaxFileScanSeconds = 40,
     [int]$Days = 60,
     [string[]]$ExtraKeywords = @(),
     [string]$OutDir
@@ -30,7 +32,7 @@ param(
 
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference    = 'SilentlyContinue'
-$Version = '3.0'
+$Version = '3.1'
 $Start   = Get-Date
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -47,26 +49,22 @@ New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 # ----------------------------------------------------------------------------------------------
 #  KEYWORDS  (edit freely)
 # ----------------------------------------------------------------------------------------------
-# BRAND = names of known cheats / cheat tools. Always SERIOUS.
 $Brand = @(
  'eulen','red\s?engine','skript\.?gg','hx[\s_\-]?software','kiddion','cherax','2take1','desudo','susano',
  'cheat[\s_\-]?engine','extreme[\s_\-]?injector','xenos[\s_\-]?inject','kdmapper','lynx[\s_\-]?(menu|cheat|mod)',
  'tzx[\s_\-]?(menu|cheat)','phantom[\s_\-]?x','ro[\s_\-]?x[\s_\-]?(menu|cheat)','hammafia','aio[\s_\-]?cheats',
  '(anti[\s_\-]?cheat|ac)[\s_\-]?bypass','txadmin[\s_\-]?bypass','blacklist[\s_\-]?bypass'
 ) + $ExtraKeywords
-# PHRASE = generic cheat words. SERIOUS unless the name looks like a legit tool (see Allow).
 $Phrase = @(
  'aimbot','trigger[\s_\-]?bot','wall[\s_\-]?hack','silent[\s_\-]?aim','spoofer','hwid[\s_\-]?spoof','lua[\s_\-]?executor',
  'mod[\s_\-]?menu','fivem[\s_\-]?(hack|cheat|menu|executor|spoof|bypass)','dll[\s_\-]?inject','manual[\s_\-]?map',
  'no[\s_\-]?recoil','no[\s_\-]?spread','magic[\s_\-]?bullet','cheats?[\s_\-]?(menu|loader)','loader[\s_\-]?(cheat|hack)'
 )
-# MEDIUM / WEAK are only checked against short names (file / program / window names), never command lines.
 $Medium = @(
  'process[\s_\-]?hacker','systeminformer','x64dbg','x32dbg','ollydbg','\bida(64)?\b','reclass','scyllahide','injector',
  '(?<!anti[\s_\-]?)\bcheats?\b','\bhack(s|er|ing)?\b','executor','unban','vmprotect','themida','\.ct$'
 )
 $Weak = @('no[\s_\-]?clip','god[\s_\-]?mode','free[\s_\-]?cam','\besp\b','keygen','\bcrack(ed)?\b','autohotkey','\.ahk$')
-# ALLOW = names of legit software that would otherwise look suspicious.
 $Allow = @(
  'anti[\s_\-]?cheat','easyanticheat','battleye','ocean[\s_\-]?(anti|ac)','overwolf','medal','downloader','uploader',
  'detector','scanner','sentinel','checker','screenshare','bypasscsp'
@@ -80,11 +78,10 @@ $RxWeak    = '(?i)(' + ($Weak   -join '|') + ')'
 $RxAllow   = '(?i)(' + ($Allow  -join '|') + ')'
 $RxBin     = '(?i)(eulen|redengine|skript\.gg|kiddion|cherax|2take1|desudo|susano|aimbot|triggerbot|silent\s?aim|hwid\s?spoof|lua\s?executor|kdmapper|mod\s?menu)'
 $RxVulnDrv = '(?i)^(capcom|iqvw64e?|gdrv\d?|rtcore(32|64)|dbutil_2_3|asrdrv\d*|asio[23]?|cpuz\d*|winring0(x64)?|inpoutx?64?|physmem|phymem|kprocesshacker|mhyprot\d?|atillk64|eneio(64)?|msio(32|64)|wnbios|piddrv|directio(32|64)?|dbk(32|64)|glckio2|hwrwdrv|ntiolib(_x64)?|zam64|amifldrv64|rwdrv|winio(32|64)?|bs_def|kdmapper|asmmap(64)?|asupio|lnvmsrio|rzpnk|alsysio64|mtcbsv64)$'
-$RxSkipDir = '(?i)\\(Windows\\(WinSxS|assembly|servicing|SoftwareDistribution|Installer|System32|SysWOW64|Fonts)|Program Files( \(x86\))?\\(WindowsApps|Common Files|Microsoft|Windows[^\\]*|Google|Mozilla)|node_modules|\.git|Cache|Code Cache|GPUCache|Service Worker|ShaderCache|DawnCache|\$WinREAgent|Packages)(\\|$)'
+$RxSkipDir = '(?i)\\(Windows\\(WinSxS|assembly|servicing|SoftwareDistribution|Installer|System32|SysWOW64|Fonts)|Program Files( \(x86\))?\\(WindowsApps|Common Files|Microsoft|Windows[^\\]*|Google|Mozilla)|FiveM\\FiveM\.app\\(citizen|crashes|logs|data\\(cache|server-cache|server-cache-priv|game-storage))|node_modules|\.git|Cache|Code Cache|GPUCache|Service Worker|ShaderCache|DawnCache|\$WinREAgent|Packages)(\\|$)'
 $RxRemote  = '(?i)(anydesk|teamviewer|parsec|rustdesk|ultraviewer|supremo|ammyy|splashtop|radmin|chromoting|screenconnect|aeroadmin)'
 $RxUserDir = '(?i)\\(Users|ProgramData|Temp|Downloads|Desktop)\\'
 
-# Friendly names + "why it matters" for each category
 $CatInfo = @{
  'Process'       = @('Suspicious program running', 'A running program has the name of a known cheat or hacking tool.')
  'WindowTitle'   = @('Suspicious window open', 'An open window title matches a cheat or hacking tool.')
@@ -140,7 +137,6 @@ $Seen     = New-Object 'System.Collections.Generic.HashSet[string]'
 $SevOrder = @{ High = 0; Medium = 1; Low = 2; Info = 3 }
 $SigCache = @{}
 
-# Processes that belong to this scan itself (so the scanner never flags itself)
 $SelfPids = New-Object 'System.Collections.Generic.HashSet[int]'
 $cur = [int]$PID
 while ($cur -gt 0 -and $SelfPids.Add($cur)) {
@@ -152,7 +148,6 @@ while ($cur -gt 0 -and $SelfPids.Add($cur)) {
 function Leaf([string]$s) { try { [IO.Path]::GetFileName($s.TrimEnd('\')) } catch { $s } }
 function Cut([string]$s, [int]$n = 120) { if ($s.Length -gt $n) { $s.Substring(0, $n - 3) + '...' } else { $s } }
 
-# short = the file/program/window NAME.  full = full path (only used for the strong checks).
 function Get-Sev([string]$short, [string]$full = '') {
     $all = "$short $full"
     if ($all -match $RxBrand)   { return 'High' }
@@ -230,10 +225,12 @@ function Get-GtaDirs {
     }
     $d | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
 }
-function Walk([string]$Root, [int]$MaxDepth = 64) {
+# Directory walker with depth limit + time limit
+function Walk([string]$Root, [int]$MaxDepth = 64, $SW = $null, [int]$Limit = 0) {
     $stack = New-Object 'System.Collections.Generic.Stack[object]'
     $stack.Push(@($Root, 0))
     while ($stack.Count -gt 0) {
+        if ($SW -and $SW.Elapsed.TotalSeconds -gt $Limit) { break }
         $it = $stack.Pop(); $d = $it[0]; $depth = $it[1]
         if ($d -match $RxSkipDir) { continue }
         $leaf = Leaf $d
@@ -258,7 +255,7 @@ $line = '=' * 72
 Write-Host ''
 Write-Host $line -ForegroundColor Magenta
 Write-Host "   FiveM-Sentinel v$Version  -  PC CHECK" -ForegroundColor White
-Write-Host ("   PC: {0}    Date: {1}    Mode: {2}" -f $env:COMPUTERNAME, $Start.ToString('yyyy-MM-dd HH:mm'), $(if ($Deep) { 'DEEP (all drives)' } else { 'FAST' })) -ForegroundColor Gray
+Write-Host ("   PC: {0}    Date: {1}    Mode: {2}" -f $env:COMPUTERNAME, $Start.ToString('yyyy-MM-dd HH:mm'), $(if ($Deep) { 'DEEP (all drives, slow)' } else { 'QUICK (key folders)' })) -ForegroundColor Gray
 Write-Host '   Read-only: nothing is changed, deleted or uploaded.' -ForegroundColor DarkGray
 Write-Host $line -ForegroundColor Magenta
 Write-Host ''
@@ -317,12 +314,12 @@ Invoke-Section 'FiveM and GTA V folders' {
                 Add-Finding "FiveM-$sub" 'High' $f.FullName "Created $($f.CreationTime.ToString('yyyy-MM-dd')) | SHA256 $(Get-Hash $f.FullName)"
             }
         }
-        foreach ($f in Get-ChildItem $app -Recurse -File -Force -Include *.asi,*.sys) {
+        foreach ($f in Get-ChildItem $app -Recurse -Depth 2 -File -Force | Where-Object { $_.Extension -in '.asi','.sys' }) {
             Add-Finding 'FiveM-Files' 'Medium' $f.FullName "SHA256 $(Get-Hash $f.FullName)"
         }
         $ini = Join-Path $app 'CitizenFX.ini'
         if (Test-Path $ini) { foreach ($l in Get-Content $ini) { if ((Get-Sev $l) -eq 'High') { Add-Finding 'CitizenFX.ini' 'High' $l.Trim() $ini } } }
-        foreach ($lg in (Get-ChildItem (Join-Path $app 'logs') -Filter *.log -File | Sort-Object LastWriteTime -Descending | Select-Object -First 25)) {
+        foreach ($lg in (Get-ChildItem (Join-Path $app 'logs') -Filter *.log -File | Sort-Object LastWriteTime -Descending | Select-Object -First 10)) {
             foreach ($h in (Select-String -Path $lg.FullName -Pattern $RxStrong | Select-Object -First 3)) {
                 Add-Finding 'FiveM-Log' 'High' $h.Line.Trim() $lg.Name
             }
@@ -341,31 +338,60 @@ Invoke-Section 'FiveM and GTA V folders' {
 }
 
 # ----------------------------------------------------------------------------------------------
-#  4. FILE SYSTEM
+#  4. KEY FOLDERS (time-limited)
 # ----------------------------------------------------------------------------------------------
-Invoke-Section ('Files on disk' + $(if ($Deep) { ' (deep - slow)' } else { ' (may take a few min)' })) {
-    $roots = @()
+Invoke-Section ('Key folders' + $(if ($Deep) { ' (deep - slow)' } else { " (max ${MaxFileScanSeconds}s)" })) {
+    # Recycle Bin first (fast + important)
+    foreach ($i in Get-ChildItem "$env:SystemDrive\`$Recycle.Bin" -Recurse -Force -File | Where-Object { $_.Name -like '$I*' }) {
+        $b = [IO.File]::ReadAllBytes($i.FullName)
+        if ($b.Length -lt 30) { continue }
+        $off = if ([BitConverter]::ToInt64($b, 0) -eq 2) { 28 } else { 24 }
+        $orig = [Text.Encoding]::Unicode.GetString($b, $off, $b.Length - $off).Trim([char]0)
+        $when = [DateTime]::FromFileTime([BitConverter]::ToInt64($b, 16))
+        $s = Get-Sev (Leaf $orig) $orig
+        if ($s -eq 'High' -or $s -eq 'Medium') { Add-Finding 'RecycleBin' $s $orig "Deleted on $($when.ToString('yyyy-MM-dd HH:mm'))" }
+    }
+
+    $sw    = [Diagnostics.Stopwatch]::StartNew()
+    $limit = if ($Deep) { 86400 } else { $MaxFileScanSeconds }
+    $roots = @()   # most important first
     if ($Deep) {
         foreach ($d in Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -in 2,3 }) { $roots += ,@(($d.DeviceID + '\'), 64) }
     } else {
         foreach ($p in Get-UserProfiles) {
-            foreach ($s in 'Desktop','Downloads','Documents','Videos','Pictures','AppData\Roaming','AppData\Local','AppData\LocalLow','OneDrive') { $roots += ,@((Join-Path $p.FullName $s), 64) }
+            $roots += ,@((Join-Path $p.FullName 'Downloads'), 4)
+            $roots += ,@((Join-Path $p.FullName 'Desktop'), 4)
+            $roots += ,@((Join-Path $p.FullName 'AppData\Local\Temp'), 3)
+            $roots += ,@((Join-Path $p.FullName 'AppData\Local\FiveM'), 4)
+            $roots += ,@((Join-Path $p.FullName 'Documents'), 3)
+        }
+        $roots += ,@("$env:SystemRoot\Temp", 2)
+        foreach ($p in Get-UserProfiles) {
+            $roots += ,@((Join-Path $p.FullName 'AppData\Roaming'), 2)
+            $roots += ,@((Join-Path $p.FullName 'AppData\Local'), 1)
             $roots += ,@($p.FullName, 1)
         }
-        $roots += ,@("$env:ProgramData", 6); $roots += ,@("$env:SystemRoot\Temp", 6); $roots += ,@("$env:SystemDrive\", 1)
-        foreach ($d in Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -in 2,3 -and $_.DeviceID -ne $env:SystemDrive }) { $roots += ,@(($d.DeviceID + '\'), 5) }
+        $roots += ,@("$env:ProgramData", 2)
+        $roots += ,@("$env:SystemDrive\", 1)
+        foreach ($d in Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -in 2,3 -and $_.DeviceID -ne $env:SystemDrive }) { $roots += ,@(($d.DeviceID + '\'), 3) }
     }
+
     $nameExt = '.exe','.dll','.sys','.asi','.lua','.zip','.rar','.7z','.bat','.cmd','.ps1','.vbs','.js','.ct','.cetrainer','.msi','.iso'
     $binExt  = '.exe','.dll','.sys','.asi'
     $textExt = '.lua','.bat','.cmd','.ps1','.vbs','.cfg','.ini','.json','.txt'
+    $recent  = (Get-Date).AddDays(-30)
+    $textN = 0; $binN = 0
+
     foreach ($r in $roots) {
+        if ($sw.Elapsed.TotalSeconds -gt $limit) { break }
         if (-not (Test-Path -LiteralPath $r[0])) { continue }
-        Walk $r[0] $r[1] | ForEach-Object {
+        Walk $r[0] $r[1] $sw $limit | ForEach-Object {
             $f = $_
             if ($f -like "$OutDir*") { return }
             $name = [IO.Path]::GetFileName($f)
             $ext  = [IO.Path]::GetExtension($f).ToLower()
 
+            # 1) name check (fast)
             if ($ext -in $nameExt) {
                 $sev = Get-Sev $name
                 if ($sev -and $sev -ne 'High' -and $ext -in $binExt -and (Test-Signed $f)) { $sev = $null }
@@ -378,16 +404,20 @@ Invoke-Section ('Files on disk' + $(if ($Deep) { ' (deep - slow)' } else { ' (ma
             if ($ext -eq '.sys' -and $f -match $RxUserDir -and $f -notmatch '(?i)\\(Windows|Program Files)') { Add-Finding 'File' 'Medium' $f ('Driver file in a user folder | SHA256 ' + (Get-Hash $f)) }
             if ($ext -eq '.asi' -and $f -notmatch '(?i)Grand Theft Auto') { Add-Finding 'File' 'Medium' $f '.asi plugin outside the GTA folder' }
 
-            if ($ext -in $textExt -and $f -match '(?i)\\Users\\[^\\]+\\(Desktop|Downloads|Documents)\\|\\Temp\\|\\FiveM\\') {
+            # 2) small text files in the most important folders only (capped)
+            if ($textN -lt 300 -and $ext -in $textExt -and $f -match '(?i)\\Users\\[^\\]+\\(Desktop|Downloads|Documents)\\|\\Temp\\') {
                 $fi = New-Object IO.FileInfo $f
-                if ($fi.Length -gt 0 -and $fi.Length -lt 2MB) {
+                if ($fi.Length -gt 0 -and $fi.Length -lt 256KB) {
+                    $textN++
                     $txt = [IO.File]::ReadAllText($f)
                     if ($txt -match $RxStrong -and $txt -notmatch 'FiveM-Sentinel') { Add-Finding 'FileContent' 'Medium' $f ('Contains: ' + $Matches[0]) }
                 }
             }
-            if ($ext -in $binExt -and $f -match '(?i)\\Users\\[^\\]+\\(Downloads|Desktop|Documents)\\|\\Temp\\|\\FiveM\\|\\ProgramData\\') {
+            # 3) inside RECENT programs in Downloads/Desktop/Temp only (capped)
+            if ($binN -lt 80 -and $ext -in $binExt -and $f -match '(?i)\\Users\\[^\\]+\\(Downloads|Desktop)\\|\\Temp\\') {
                 $fi = New-Object IO.FileInfo $f
-                if ($fi.Length -gt 1KB -and $fi.Length -lt 60MB) {
+                if ($fi.Length -gt 1KB -and $fi.Length -lt 20MB -and $fi.LastWriteTime -gt $recent) {
+                    $binN++
                     $b = [IO.File]::ReadAllBytes($f)
                     $hit = $null
                     $a = [Text.Encoding]::GetEncoding(28591).GetString($b)
@@ -398,14 +428,8 @@ Invoke-Section ('Files on disk' + $(if ($Deep) { ' (deep - slow)' } else { ' (ma
             }
         }
     }
-    foreach ($i in Get-ChildItem "$env:SystemDrive\`$Recycle.Bin" -Recurse -Force -File | Where-Object { $_.Name -like '$I*' }) {
-        $b = [IO.File]::ReadAllBytes($i.FullName)
-        if ($b.Length -lt 30) { continue }
-        $off = if ([BitConverter]::ToInt64($b, 0) -eq 2) { 28 } else { 24 }
-        $orig = [Text.Encoding]::Unicode.GetString($b, $off, $b.Length - $off).Trim([char]0)
-        $when = [DateTime]::FromFileTime([BitConverter]::ToInt64($b, 16))
-        $s = Get-Sev (Leaf $orig) $orig
-        if ($s -eq 'High' -or $s -eq 'Medium') { Add-Finding 'RecycleBin' $s $orig "Deleted on $($when.ToString('yyyy-MM-dd HH:mm'))" }
+    if (-not $Deep -and $sw.Elapsed.TotalSeconds -gt $limit) {
+        Add-Finding 'Scanner' 'Info' "File scan stopped after ${MaxFileScanSeconds}s (time limit)" 'Run with -Deep or a higher -MaxFileScanSeconds for a longer scan.'
     }
 }
 
@@ -649,9 +673,9 @@ $med  = @($all | Where-Object { $_.Severity -eq 'Medium' })
 $low  = @($all | Where-Object { $_.Severity -eq 'Low' })
 $info = @($all | Where-Object { $_.Severity -eq 'Info' })
 
-if ($high.Count -gt 0)    { $verdict = 'CHEAT EVIDENCE FOUND';          $vTag = '[XX]'; $vColor = 'Red';    $vClass = 'bad';  $vText = 'Serious items were found. Review them below before making a decision.' }
-elseif ($med.Count -gt 0) { $verdict = 'SOME THINGS NEED A MANUAL LOOK'; $vTag = '[!!]'; $vColor = 'Yellow'; $vClass = 'warn'; $vText = 'Nothing certain, but a few items are suspicious. Check them below.' }
-else                      { $verdict = 'NOTHING SUSPICIOUS FOUND';       $vTag = '[OK]'; $vColor = 'Green';  $vClass = 'ok';   $vText = 'No known cheat traces were found. This does NOT guarantee the PC is clean (private cheats and hardware can evade scanners).' }
+if ($high.Count -gt 0)    { $verdict = 'CHEAT EVIDENCE FOUND';             $vTag = '[XX]'; $vColor = 'Red';    $vClass = 'bad';  $vText = 'Serious items were found. Review them below before making a decision.' }
+elseif ($med.Count -gt 0) { $verdict = 'SOME THINGS NEED A MANUAL LOOK';   $vTag = '[!!]'; $vColor = 'Yellow'; $vClass = 'warn'; $vText = 'Nothing certain, but a few items are suspicious. Check them below.' }
+else                      { $verdict = 'NOTHING SUSPICIOUS FOUND';         $vTag = '[OK]'; $vColor = 'Green';  $vClass = 'ok';   $vText = 'No known cheat traces were found. This does NOT guarantee the PC is clean (private cheats and hardware can evade scanners).' }
 
 Write-Host ''
 Write-Host $line -ForegroundColor $vColor
@@ -698,12 +722,13 @@ if ($info | Where-Object { $_.Category -eq 'FiveM' }) {
 #  REPORT FILES
 # ----------------------------------------------------------------------------------------------
 function H([string]$s) { [Net.WebUtility]::HtmlEncode($s) }
-$lbl = @{ High = 'SERIOUS'; Medium = 'CHECK'; Low = 'NOTE'; Info = 'INFO' }
-$dur = [int]((Get-Date) - $Start).TotalSeconds
+$lbl  = @{ High = 'SERIOUS'; Medium = 'CHECK'; Low = 'NOTE'; Info = 'INFO' }
+$dur  = [int]((Get-Date) - $Start).TotalSeconds
+$mode = if ($Deep) { 'DEEP' } else { 'QUICK' }
 
 $sb = New-Object System.Text.StringBuilder
 [void]$sb.AppendLine("FiveM-Sentinel v$Version report")
-[void]$sb.AppendLine("PC: $env:COMPUTERNAME   User: $env:USERNAME   Date: $($Start.ToString('yyyy-MM-dd HH:mm'))   Duration: ${dur}s   Mode: $(if($Deep){'DEEP'}else{'FAST'})")
+[void]$sb.AppendLine("PC: $env:COMPUTERNAME   User: $env:USERNAME   Date: $($Start.ToString('yyyy-MM-dd HH:mm'))   Duration: ${dur}s   Mode: $mode")
 [void]$sb.AppendLine("RESULT: $verdict   (SERIOUS $($high.Count) / CHECK $($med.Count) / NOTES $($low.Count))")
 [void]$sb.AppendLine(('-' * 90))
 foreach ($f in $all) {
@@ -726,7 +751,7 @@ $infoRows = New-Object System.Text.StringBuilder
 foreach ($f in $info) { [void]$infoRows.AppendLine("<li>$(H $f.Item) <span class='d'>$(H $f.Detail)</span></li>") }
 $css = 'body{font-family:Segoe UI,Arial,sans-serif;background:#111418;color:#e8eaed;margin:0;padding:24px}.wrap{max-width:1100px;margin:auto}h1{margin:0 0 4px;font-size:22px}.sub{color:#9aa0a6;font-size:13px;margin-bottom:18px}.v{padding:18px 22px;border-radius:10px;margin-bottom:18px}.v h2{margin:0 0 6px}.v.bad{background:#3b1717;border:1px solid #e5484d}.v.warn{background:#3a3115;border:1px solid #f5a623}.v.ok{background:#14301f;border:1px solid #3fb950}.cnt span{display:inline-block;margin-right:18px;font-weight:600}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #2a2f36;padding:9px 10px;vertical-align:top;font-size:13px;text-align:left}th{color:#9aa0a6}.b{padding:2px 8px;border-radius:5px;font-size:11px;font-weight:700}.b.High{background:#e5484d;color:#fff}.b.Medium{background:#f5a623;color:#111}.b.Low{background:#2d9cdb;color:#fff}.m{font-family:Consolas,monospace;word-break:break-all}.d{color:#9aa0a6;font-family:Segoe UI,Arial;font-size:12px;margin-top:3px}.w{color:#9aa0a6;font-size:12px;margin-top:3px}li{margin:4px 0}'
 $html = "<!doctype html><html><head><meta charset='utf-8'><title>FiveM-Sentinel report</title><style>$css</style></head><body><div class='wrap'>" +
-        "<h1>FiveM-Sentinel report</h1><div class='sub'>PC: $(H $env:COMPUTERNAME) &nbsp;|&nbsp; $(H $Start.ToString('yyyy-MM-dd HH:mm')) &nbsp;|&nbsp; Mode: $(if($Deep){'DEEP'}else{'FAST'}) &nbsp;|&nbsp; ${dur}s</div>" +
+        "<h1>FiveM-Sentinel report</h1><div class='sub'>PC: $(H $env:COMPUTERNAME) &nbsp;|&nbsp; $(H $Start.ToString('yyyy-MM-dd HH:mm')) &nbsp;|&nbsp; Mode: $mode &nbsp;|&nbsp; ${dur}s</div>" +
         "<div class='v $vClass'><h2>$(H $verdict)</h2><div>$(H $vText)</div><div class='cnt' style='margin-top:10px'><span>SERIOUS: $($high.Count)</span><span>CHECK: $($med.Count)</span><span>NOTES: $($low.Count)</span></div></div>" +
         "<table><tr><th style='width:90px'>Level</th><th style='width:300px'>What</th><th>Details</th></tr>$($rows.ToString())</table>" +
         "<h3>System info</h3><ul>$($infoRows.ToString())</ul>" +
